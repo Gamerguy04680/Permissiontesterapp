@@ -1,0 +1,175 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Write app files
+        run: |
+          mkdir -p www native scripts
+          cat > package.json <<'EOF_FILE'
+          {"name":"permission-tester","version":"1.0.0","private":true,"dependencies":{"@capacitor/android":"^6.1.2","@capacitor/cli":"^6.1.2","@capacitor/core":"^6.1.2","@capacitor/local-notifications":"^6.1.0"}}
+          EOF_FILE
+          cat > capacitor.config.json <<'EOF_FILE'
+          {"appId":"com.william.permtester","appName":"Permission Tester","webDir":"www"}
+          EOF_FILE
+          cat > www/index.html <<'EOF_FILE'
+          <!DOCTYPE html><html><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+          <title>Permission Tester</title>
+          <style>
+          body{margin:0;padding:16px;background:#101018;color:#eee;font-family:system-ui,sans-serif}
+          h1{font-size:22px;margin:8px 0 4px}p.s{color:#889;font-size:13px;margin:0 0 14px}
+          .c{background:#1b1b2a;border-radius:12px;padding:12px;margin-bottom:10px}
+          .r{display:flex;align-items:center;gap:8px}.n{flex:1;font-weight:600}
+          .d{width:12px;height:12px;border-radius:50%;background:#666}.d.ok{background:#3ddc84}.d.no{background:#ff4d4d}
+          button{background:#5b5bff;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-size:14px}
+          button.t{background:#2a2a40}.o{font-size:12px;color:#9ab;margin-top:8px;min-height:14px;word-break:break-word}
+          video{width:100%;border-radius:8px;margin-top:8px;display:none}
+          </style></head><body>
+          <h1>Permission Tester</h1><p class="s">Request each permission, then press Test to prove it works.</p>
+          <div id="list"></div>
+          <script>
+          const cap=window.Capacitor, native=cap&&cap.isNativePlatform&&cap.isNativePlatform();
+          const PT=native?cap.registerPlugin('PermTools'):null;
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const say=(id,t)=>document.getElementById('o-'+id).textContent=t;
+          async function stream(c,ms,fn){const s=await navigator.mediaDevices.getUserMedia(c);await fn(s);await sleep(ms);s.getTracks().forEach(t=>t.stop())}
+          const P=[
+          {id:'overlay',n:'Display over other apps',p:'OVERLAY',test:async id=>{await PT.showBlock();say(id,'Flashy block shown. Switch apps to see it; tap it to close.')},extra:['Hide',async()=>PT.hideBlock()]},
+          {id:'notif',n:'Notifications',p:'android.permission.POST_NOTIFICATIONS',test:async id=>{const L=cap.Plugins.LocalNotifications;await L.requestPermissions();await L.schedule({notifications:[{id:Date.now()%100000,title:'Permission Tester',body:'Notifications work!',schedule:{at:new Date(Date.now()+1500)}}]});say(id,'Notification coming in 1.5s...')}},
+          {id:'mic',n:'Microphone',p:'android.permission.RECORD_AUDIO',test:async id=>{await stream({audio:true},3000,async s=>{const a=new AudioContext(),an=a.createAnalyser();a.createMediaStreamSource(s).connect(an);const b=new Uint8Array(an.frequencyBinCount);let m=0;const i=setInterval(()=>{an.getByteTimeDomainData(b);m=Math.max(m,...b.map(v=>Math.abs(v-128)));say(id,'Listening... peak level '+m)},100);setTimeout(()=>{clearInterval(i);a.close()},2900)})}},
+          {id:'cam',n:'Camera',p:'android.permission.CAMERA',test:async id=>{const v=document.getElementById('v');await stream({video:true},3000,async s=>{v.srcObject=s;v.style.display='block';await v.play();say(id,'Camera live for 3s')});v.style.display='none'}},
+          {id:'loc',n:'Location',p:'android.permission.ACCESS_FINE_LOCATION',test:id=>new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(p=>{say(id,'Lat '+p.coords.latitude.toFixed(4)+', Lon '+p.coords.longitude.toFixed(4));res()},rej,{enableHighAccuracy:true,timeout:10000}))},
+          {id:'vib',n:'Vibration (no prompt)',p:null,test:async id=>{say(id,navigator.vibrate&&navigator.vibrate([200,100,200])?'Buzz!':'Not supported')}},
+          {id:'img',n:'Photos / media',p:'android.permission.READ_MEDIA_IMAGES'},
+          {id:'con',n:'Contacts',p:'android.permission.READ_CONTACTS'},
+          {id:'cal',n:'Calendar',p:'android.permission.READ_CALENDAR'},
+          {id:'bt',n:'Nearby devices (Bluetooth)',p:'android.permission.BLUETOOTH_CONNECT'},
+          {id:'btscan',n:'Bluetooth scan',p:'android.permission.BLUETOOTH_SCAN'},
+          {id:'body',n:'Body sensors',p:'android.permission.BODY_SENSORS'},
+          {id:'act',n:'Physical activity',p:'android.permission.ACTIVITY_RECOGNITION'},
+          {id:'ph',n:'Phone state',p:'android.permission.READ_PHONE_STATE'}];
+          const list=document.getElementById('list');
+          list.innerHTML=P.map(x=>`<div class="c"><div class="r"><span class="d" id="d-${x.id}"></span><span class="n">${x.n}</span>
+          ${x.p?`<button onclick="req('${x.id}')">Request</button>`:''}<button class="t" onclick="tst('${x.id}')">Test</button>${x.extra?`<button class="t" onclick="ext('${x.id}')">${x.extra[0]}</button>`:''}</div><div class="o" id="o-${x.id}"></div></div>`).join('')+'<video id="v" playsinline muted></video>';
+          const by=id=>P.find(x=>x.id===id);
+          async function status(x){if(!x.p||!PT)return;try{const r=await PT.check({perm:x.p});document.getElementById('d-'+x.id).className='d '+(r.granted?'ok':'no')}catch(e){}}
+          const refresh=()=>P.forEach(status);
+          async function req(id){const x=by(id);if(!PT)return say(id,'Install the APK to request native permissions');await PT.request({perm:x.p});for(let i=0;i<20;i++){await sleep(700);refresh()}}
+          async function tst(id){const x=by(id);try{if(x.test)await x.test(id);else{const r=await PT.check({perm:x.p});say(id,r.granted?'Granted \u2713':'Not granted \u2717')}}catch(e){say(id,'Failed: '+(e.message||e))}}
+          async function ext(id){await by(id).extra[1]()}
+          document.addEventListener('visibilitychange',refresh);refresh();
+          </script></body></html>
+          EOF_FILE
+          cat > native/MainActivity.java <<'EOF_FILE'
+          package com.william.permtester;
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+          public class MainActivity extends BridgeActivity {
+            @Override public void onCreate(Bundle s) { registerPlugin(PermTools.class); super.onCreate(s); }
+          }
+          EOF_FILE
+          cat > native/PermTools.java <<'EOF_FILE'
+          package com.william.permtester;
+          import android.content.*;
+          import android.content.pm.PackageManager;
+          import android.graphics.*;
+          import android.net.Uri;
+          import android.os.*;
+          import android.provider.Settings;
+          import android.view.*;
+          import android.widget.TextView;
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+          import com.getcapacitor.*;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+
+          @CapacitorPlugin(name = "PermTools")
+          public class PermTools extends Plugin {
+            private View block;
+            private final Handler h = new Handler(Looper.getMainLooper());
+
+            @PluginMethod public void check(PluginCall c) {
+              String p = c.getString("perm");
+              boolean g = "OVERLAY".equals(p) ? Settings.canDrawOverlays(getContext())
+                : ContextCompat.checkSelfPermission(getContext(), p) == PackageManager.PERMISSION_GRANTED;
+              JSObject o = new JSObject(); o.put("granted", g); c.resolve(o);
+            }
+            @PluginMethod public void request(PluginCall c) {
+              String p = c.getString("perm");
+              if ("OVERLAY".equals(p)) {
+                Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getContext().getPackageName()));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(i);
+              } else ActivityCompat.requestPermissions(getActivity(), new String[]{p}, 77);
+              c.resolve();
+            }
+            @PluginMethod public void showBlock(PluginCall c) {
+              if (!Settings.canDrawOverlays(getContext())) { c.reject("Overlay permission not granted"); return; }
+              getActivity().runOnUiThread(() -> {
+                hide();
+                WindowManager wm = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
+                TextView t = new TextView(getContext());
+                t.setText("OVERLAY WORKS!\n(tap to close)");
+                t.setTextColor(Color.BLACK); t.setTextSize(24); t.setGravity(Gravity.CENTER);
+                t.setTypeface(null, Typeface.BOLD);
+                t.setOnClickListener(v -> hide());
+                WindowManager.LayoutParams lp = new WindowManager.LayoutParams(750, 550,
+                  WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                  WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                  PixelFormat.TRANSLUCENT);
+                lp.gravity = Gravity.CENTER;
+                wm.addView(t, lp); block = t;
+                final int[] cols = {Color.RED, Color.MAGENTA, Color.CYAN, Color.YELLOW, Color.GREEN, Color.rgb(255,128,0)};
+                final int[] n = {0};
+                h.post(new Runnable() { public void run() {
+                  if (block != null) { block.setBackgroundColor(cols[n[0]++ % cols.length]); h.postDelayed(this, 150); }
+                }});
+              });
+              c.resolve();
+            }
+            private void hide() {
+              h.removeCallbacksAndMessages(null);
+              if (block != null) {
+                try { ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).removeView(block); } catch (Exception e) {}
+                block = null;
+              }
+            }
+            @PluginMethod public void hideBlock(PluginCall c) { getActivity().runOnUiThread(this::hide); c.resolve(); }
+          }
+          EOF_FILE
+          cat > scripts/patch.sh <<'EOF_FILE'
+          set -e
+          cp native/*.java android/app/src/main/java/com/william/permtester/
+          P=""
+          for p in RECORD_AUDIO CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION POST_NOTIFICATIONS SYSTEM_ALERT_WINDOW VIBRATE READ_MEDIA_IMAGES READ_CONTACTS READ_CALENDAR BLUETOOTH_CONNECT BLUETOOTH_SCAN BODY_SENSORS ACTIVITY_RECOGNITION READ_PHONE_STATE; do
+            P="$P<uses-permission android:name=\"android.permission.$p\"/>"
+          done
+          sed -i "s|</manifest>|$P</manifest>|" android/app/src/main/AndroidManifest.xml
+          EOF_FILE
+      - run: npm install
+      - run: npx cap add android
+      - run: bash scripts/patch.sh
+      - run: npx cap sync android
+      - run: cd android && chmod +x gradlew && ./gradlew assembleDebug
+      - name: Publish APK to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk PermissionTester.apk
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest PermissionTester.apk --target ${{ github.sha }} --title "Permission Tester APK" --notes "Download PermissionTester.apk and install it."
+          
